@@ -1,8 +1,14 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    match /users/{userId}/{allPaths=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // PDFs are the only browser-uploadable binary in the MVP. All derived
+    // artifacts are written by a trusted server and never by a client.
+    match /users/{userId}/publications/{publicationId}/source/{fileName} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.size <= 25 * 1024 * 1024;
+      allow update, delete: if false;
     }
   }
 }

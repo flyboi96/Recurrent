@@ -42,6 +42,14 @@ The browser may access only data beneath its own authenticated `users/{uid}` pre
 
 See `firestore.rules` and `storage.rules` as the MVP baseline; deploy and test rules with the Firebase emulator before production.
 
+## Cost guardrails (required before enabling AI)
+
+An `OPENAI_API_KEY` by itself does nothing in this app. AI is **fail-closed**: `AI_ENABLED=false` is the default, and no server route/provider should send a request until it is explicitly set to `true` after these controls are configured.
+
+`src/services/ai-policy.ts` rejects work that exceeds a file, page, chunk, question, input-token, output-token, per-user daily-token, or project monthly-token limit. The initial defaults are intentionally conservative and configurable only through server environment variables. A production ingestion worker must reserve its estimated token budget through an authenticated server-side Firestore transaction before contacting the provider, then reconcile actual usage from the API response. It must also use an idempotency key of `publicationId + source hash + revision`, and allow no more than two retries.
+
+Set Firebase/Google Cloud billing alerts and an applicable Cloud Run/Functions spend cap before setting `AI_ENABLED=true`. Create a separate OpenAI project for Recurrent and set its usage notification threshold and project spend limit. Provider-side limits are a backstop; the policy check and usage ledger are the application hard stop.
+
 ## Local setup
 
 1. Install dependencies: `npm install`
