@@ -8,7 +8,8 @@ service firebase.storage {
       allow create: if request.auth != null && request.auth.uid == userId
         && request.resource.contentType == 'application/pdf'
         && request.resource.size <= 25 * 1024 * 1024;
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

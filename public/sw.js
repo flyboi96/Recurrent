@@ -1,4 +1,4 @@
-const CACHE = "recurrent-shell-v2";
+const CACHE = "recurrent-shell-v3";
 const ASSETS = ["/", "/manifest.webmanifest", "/icon.svg"];
 self.addEventListener("install", event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
