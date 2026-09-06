@@ -4,6 +4,8 @@ Recurrent is a mobile-first PWA for continuous, source-linked professional learn
 
 **Live app:** https://recurrent-81b0e.web.app
 
+Releases use the visible app version in the commit subject: `release(vX.Y.Z): concise change summary`.
+
 ## Architecture
 
 - **Next.js / React / TypeScript / Tailwind** render the PWA application shell.
