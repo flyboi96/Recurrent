@@ -1,0 +1,16 @@
+# Dependencies and generated build output
+node_modules/
+.next/
+out/
+
+# Local secrets and Firebase service-account material
+.env
+.env.local
+.env.*.local
+*.pem
+service-account*.json
+
+# Local/editor artifacts
+.DS_Store
+*.tsbuildinfo
+coverage/
