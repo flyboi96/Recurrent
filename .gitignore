@@ -14,3 +14,5 @@ service-account*.json
 .DS_Store
 *.tsbuildinfo
 coverage/
+.firebase/
+firebase-debug.log

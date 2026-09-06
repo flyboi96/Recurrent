@@ -2,6 +2,8 @@
 
 Recurrent is a mobile-first PWA for continuous, source-linked professional learning. This initial vertical slice demonstrates the intended pilot flow: a short daily study session, source citations, a daily lesson, publication controls, and defensible proficiency reporting.
 
+**Live app:** https://recurrent-81b0e.web.app
+
 ## Architecture
 
 - **Next.js / React / TypeScript / Tailwind** render the PWA application shell.
@@ -81,7 +83,14 @@ FIREBASE_ADMIN_PRIVATE_KEY=
 
 ## Firebase setup and deployment
 
-Create a Firebase project, enable Email/Password Authentication, create Firestore and Cloud Storage, then deploy the supplied rules with Firebase CLI. Add a Functions or Cloud Run worker for ingestion. Configure secrets in the server runtime, not in `.env.local` shipped to clients. Deploy the Next.js app to Firebase App Hosting, Cloud Run, or another HTTPS-capable host.
+Create a Firebase project, enable Email/Password Authentication, create Firestore and Cloud Storage, then deploy the supplied rules with Firebase CLI. This current client-only PWA uses Firebase Hosting:
+
+```bash
+npm run build
+firebase deploy --only hosting
+```
+
+Add a Functions or Cloud Run worker for ingestion only after the AI ledger and provider controls are implemented. Configure secrets in the server runtime, not in `.env` shipped to clients. Firebase Hosting only receives the compiled public Firebase web configuration; it never receives `OPENAI_API_KEY` or Firebase Admin credentials.
 
 ## Current limitations and next work
 
