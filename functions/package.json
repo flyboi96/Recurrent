@@ -1,14 +1,22 @@
 {
   "name": "recurrent-functions",
   "private": true,
-  "engines": { "node": "20" },
+  "engines": {
+    "node": "22"
+  },
   "main": "lib/index.js",
-  "scripts": { "build": "tsc" },
+  "scripts": {
+    "build": "tsc"
+  },
   "dependencies": {
+    "@genkit-ai/google-genai": "^1.42.0",
     "firebase-admin": "13.0.2",
     "firebase-functions": "6.3.2",
-    "openai": "4.77.3",
-    "pdfjs-dist": "4.10.38"
+    "genkit": "^1.42.0",
+    "pdfjs-dist": "4.10.38",
+    "zod": "^3.25.76"
   },
-  "devDependencies": { "typescript": "5.7.2" }
+  "devDependencies": {
+    "typescript": "5.7.2"
+  }
 }
