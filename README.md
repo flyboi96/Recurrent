@@ -90,6 +90,8 @@ npm run build
 firebase deploy --only hosting
 ```
 
+Firestore rules are deployed with `firebase deploy --only firestore:rules`. Before enabling PDF upload for the first time, open **Firebase Console → Storage → Get started**, choose the bucket location deliberately (it cannot be changed later), then deploy the PDF-only Storage rules with `firebase deploy --only storage`. The application will show an understandable upload error until that one-time setup is complete.
+
 Add a Functions or Cloud Run worker for ingestion only after the AI ledger and provider controls are implemented. Configure secrets in the server runtime, not in `.env` shipped to clients. Firebase Hosting only receives the compiled public Firebase web configuration; it never receives `OPENAI_API_KEY` or Firebase Admin credentials.
 
 ## Current limitations and next work
