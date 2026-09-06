@@ -3,6 +3,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
+import { defineSecret } from "firebase-functions/params";
 import OpenAI from "openai";
 
 initializeApp();
@@ -13,6 +14,7 @@ const MAX_INPUT_TOKENS = 12_000;
 const MAX_OUTPUT_TOKENS = 1_200;
 const DAILY_LIMIT = 20_000;
 const MONTHLY_LIMIT = 150_000;
+const openAiKey = defineSecret("OPENAI_API_KEY");
 
 type StoredPublication = { title: string; storagePath: string; fileBytes: number; externalAiApproved?: boolean };
 type GeneratedQuestion = { question: string; answer: string; explanation: string; category?: string; page?: number; strictRecall?: boolean };
@@ -45,7 +47,7 @@ async function extractPages(buffer: Buffer): Promise<{ page: number; text: strin
   return pages;
 }
 
-export const processPublication = onCall({ region: "us-central1", timeoutSeconds: 120, memory: "512MiB", maxInstances: 1, concurrency: 1 }, async request => {
+export const processPublication = onCall({ region: "us-central1", timeoutSeconds: 120, memory: "512MiB", maxInstances: 1, concurrency: 1, secrets: [openAiKey] }, async request => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to process a publication.");
   const userId = request.auth.uid;
   if (process.env.AI_ENABLED !== "true") throw new HttpsError("failed-precondition", "AI processing is disabled by project policy.");
@@ -55,7 +57,7 @@ export const processPublication = onCall({ region: "us-central1", timeoutSeconds
   const publication = publicationSnapshot.data() as StoredPublication;
   if (!publication.externalAiApproved) throw new HttpsError("permission-denied", "External AI approval is required for this publication.");
   if (!publication.storagePath || publication.fileBytes > 25 * 1024 * 1024) throw new HttpsError("invalid-argument", "Publication is not eligible for processing.");
-  const apiKey = process.env.OPENAI_API_KEY; if (!apiKey) throw new HttpsError("failed-precondition", "OpenAI secret is not configured.");
+  const apiKey = openAiKey.value(); if (!apiKey) throw new HttpsError("failed-precondition", "OpenAI secret is not configured.");
   await publicationRef.update({ status: "processing", processingStartedAt: FieldValue.serverTimestamp() });
   try {
     const [buffer] = await getStorage().bucket().file(publication.storagePath).download(); const pages = await extractPages(buffer);
