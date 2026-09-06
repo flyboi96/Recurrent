@@ -16,3 +16,4 @@ service-account*.json
 coverage/
 .firebase/
 firebase-debug.log
+functions/lib/

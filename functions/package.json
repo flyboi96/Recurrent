@@ -1,0 +1,14 @@
+{
+  "name": "recurrent-functions",
+  "private": true,
+  "engines": { "node": "20" },
+  "main": "lib/index.js",
+  "scripts": { "build": "tsc" },
+  "dependencies": {
+    "firebase-admin": "13.0.2",
+    "firebase-functions": "6.3.2",
+    "openai": "4.77.3",
+    "pdfjs-dist": "4.10.38"
+  },
+  "devDependencies": { "typescript": "5.7.2" }
+}
