@@ -19,8 +19,11 @@ const CHUNK_CHARACTERS = 6_000;
 const COVERAGE_PAGES_PER_RUN = 6;
 const MAX_INPUT_TOKENS_PER_RUN = 12_000;
 const MAX_OUTPUT_TOKENS_PER_RUN = 1_200;
-const DAILY_LIMIT = 20_000;
-const MONTHLY_LIMIT = 150_000;
+// These are hard ceilings, sized to permit useful manual coverage work while
+// keeping a lost key or repeated clicks bounded.  Normal study uses saved
+// questions and makes no model request.
+const DAILY_LIMIT = 60_000;
+const MONTHLY_LIMIT = 600_000;
 const INGESTION_VERSION = 2;
 
 type StoredPublication = { title: string; storagePath: string; fileBytes: number; externalAiApproved?: boolean; sourceHash?: string; generationCursorPage?: number; ingestionVersion?: number };
@@ -32,14 +35,28 @@ const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 const period = (date: Date, kind: "day" | "month") => kind === "day" ? date.toISOString().slice(0, 10) : date.toISOString().slice(0, 7);
 const splitText = (text: string) => text.match(new RegExp(`.{1,${CHUNK_CHARACTERS}}(?:\\s|$)`, "g"))?.map(value => value.trim()).filter(Boolean) ?? [];
 
-async function reserveTokens(userId: string, tokens: number) {
+async function checkBudgetHeadroom(userId: string, worstCaseTokens: number) {
   const now = new Date(); const day = db.doc(`users/${userId}/aiUsage/daily-${period(now, "day")}`); const month = db.doc(`users/${userId}/aiUsage/monthly-${period(now, "month")}`);
   await db.runTransaction(async transaction => {
     const [daySnapshot, monthSnapshot] = await Promise.all([transaction.get(day), transaction.get(month)]);
-    const dayTokens = Number(daySnapshot.data()?.reservedTokens ?? 0); const monthTokens = Number(monthSnapshot.data()?.reservedTokens ?? 0);
-    if (dayTokens + tokens > DAILY_LIMIT) throw new HttpsError("resource-exhausted", "Daily AI budget reached.");
-    if (monthTokens + tokens > MONTHLY_LIMIT) throw new HttpsError("resource-exhausted", "Monthly project AI budget reached.");
-    transaction.set(day, { reservedTokens: dayTokens + tokens, updatedAt: FieldValue.serverTimestamp() }, { merge: true }); transaction.set(month, { reservedTokens: monthTokens + tokens, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    // reservedTokens was written by releases before v0.3.4, even when Gemini
+    // failed.  It is intentionally ignored here so failed setup attempts do
+    // not consume a user's future study allowance.
+    const dayTokens = Number(daySnapshot.data()?.actualTokens ?? 0); const monthTokens = Number(monthSnapshot.data()?.actualTokens ?? 0);
+    if (dayTokens + worstCaseTokens > DAILY_LIMIT) throw new HttpsError("resource-exhausted", "Daily AI budget reached. Try another coverage set tomorrow.");
+    if (monthTokens + worstCaseTokens > MONTHLY_LIMIT) throw new HttpsError("resource-exhausted", "Monthly AI budget reached. Try again next month.");
+  });
+}
+
+async function recordSuccessfulUsage(userId: string, inputTokens: number, outputTokens: number) {
+  const actualTokens = Math.max(1, inputTokens + outputTokens); const now = new Date(); const day = db.doc(`users/${userId}/aiUsage/daily-${period(now, "day")}`); const month = db.doc(`users/${userId}/aiUsage/monthly-${period(now, "month")}`);
+  await db.runTransaction(async transaction => {
+    const [daySnapshot, monthSnapshot] = await Promise.all([transaction.get(day), transaction.get(month)]);
+    const dayTokens = Number(daySnapshot.data()?.actualTokens ?? 0); const monthTokens = Number(monthSnapshot.data()?.actualTokens ?? 0);
+    if (dayTokens + actualTokens > DAILY_LIMIT) throw new HttpsError("resource-exhausted", "Daily AI budget reached. Try another coverage set tomorrow.");
+    if (monthTokens + actualTokens > MONTHLY_LIMIT) throw new HttpsError("resource-exhausted", "Monthly AI budget reached. Try again next month.");
+    const usage = { actualTokens: dayTokens + actualTokens, inputTokens: FieldValue.increment(inputTokens), outputTokens: FieldValue.increment(outputTokens), successfulRuns: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() };
+    transaction.set(day, usage, { merge: true }); transaction.set(month, { ...usage, actualTokens: monthTokens + actualTokens }, { merge: true });
   });
 }
 
@@ -73,10 +90,13 @@ async function generateCoverageSet(userId: string, publicationId: string, public
   const chunks = await nextCoverageChunks(userId, publicationId, publication.generationCursorPage ?? 1);
   if (!chunks.length) { await db.doc(`users/${userId}/publications/${publicationId}`).set({ status: "ready", coverageCompleteAt: FieldValue.serverTimestamp() }, { merge: true }); return { generated: 0, complete: true, nextPage: null }; }
   const source = chunks.map(chunk => `[page ${chunk.page}]\n${chunk.text}`).join("\n\n"); const inputTokens = estimateTokens(source);
-  if (inputTokens > MAX_INPUT_TOKENS_PER_RUN) throw new HttpsError("resource-exhausted", "This coverage set exceeds the input safety budget."); await reserveTokens(userId, inputTokens + MAX_OUTPUT_TOKENS_PER_RUN);
+  if (inputTokens > MAX_INPUT_TOKENS_PER_RUN) throw new HttpsError("resource-exhausted", "This coverage set exceeds the input safety budget."); await checkBudgetHeadroom(userId, inputTokens + MAX_OUTPUT_TOKENS_PER_RUN);
   const apiKey = googleGenAiKey.value(); if (!apiKey) throw new HttpsError("failed-precondition", "Google GenAI secret is not configured."); const ai = genkit({ plugins: [googleAI({ apiKey })] });
   const result = await ai.generate({ model: googleAI.model(process.env.GEMINI_MODEL || "gemini-3.6-flash"), config: { maxOutputTokens: MAX_OUTPUT_TOKENS_PER_RUN, temperature: 0.2 }, output: { schema: GeneratedQuestionSetSchema }, prompt: `You generate source-grounded professional study questions. Use only the source passages below. Generate one concise recall question for each supplied page, cite its supplied page exactly, and do not invent facts.\n\n${source}` });
   const generated = result.output?.questions as GeneratedQuestion[] | undefined; if (!Array.isArray(generated) || !generated.length) throw new Error("Gemini returned no structured questions.");
+  // Prefer the provider's measured usage; retain a conservative local fallback
+  // for providers that omit usage metadata.
+  const actualInputTokens = Number(result.usage.inputTokens ?? inputTokens); const actualOutputTokens = Number(result.usage.outputTokens ?? estimateTokens(JSON.stringify(generated))); await recordSuccessfulUsage(userId, actualInputTokens, actualOutputTokens);
   const validPages = new Set(chunks.map(chunk => chunk.page)); const batch = db.batch(); const accepted = generated.slice(0, chunks.length).filter(question => validPages.has(Number(question.page)));
   accepted.forEach(question => { const sourceChunk = chunks.find(chunk => chunk.page === Number(question.page)); batch.set(db.collection(`users/${userId}/questions`).doc(), { question: question.question, answer: question.answer, explanation: question.explanation, category: question.category || "other", page: Number(question.page), strictRecall: Boolean(question.strictRecall), publicationId, publicationTitle: publication.title, sourceChunkId: sourceChunk?.id ?? null, sourceExcerpt: sourceChunk?.text.slice(0, 700) ?? "", createdAt: FieldValue.serverTimestamp() }); });
   const nextPage = Math.max(...chunks.map(chunk => chunk.page)) + 1; batch.set(db.doc(`users/${userId}/publications/${publicationId}`), { status: "ready", generationCursorPage: nextPage, questionCount: FieldValue.increment(accepted.length), lastGeneratedAt: FieldValue.serverTimestamp() }, { merge: true }); await batch.commit(); return { generated: accepted.length, complete: false, nextPage };
