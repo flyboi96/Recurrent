@@ -6,7 +6,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 import { defineSecret } from "firebase-functions/params";
 import { googleAI } from "@genkit-ai/google-genai";
-import { genkit } from "genkit";
+import { genkit, z } from "genkit";
 
 initializeApp();
 const db = getFirestore();
@@ -26,6 +26,7 @@ const INGESTION_VERSION = 2;
 type StoredPublication = { title: string; storagePath: string; fileBytes: number; externalAiApproved?: boolean; sourceHash?: string; generationCursorPage?: number; ingestionVersion?: number };
 type SourceChunk = { id: string; page: number; chunkIndex: number; text: string };
 type GeneratedQuestion = { question: string; answer: string; explanation: string; category?: string; page?: number; strictRecall?: boolean };
+const GeneratedQuestionSetSchema = z.object({ questions: z.array(z.object({ question: z.string(), answer: z.string(), explanation: z.string(), category: z.string().optional(), page: z.number().int(), strictRecall: z.boolean().optional() })) });
 
 const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 const period = (date: Date, kind: "day" | "month") => kind === "day" ? date.toISOString().slice(0, 10) : date.toISOString().slice(0, 7);
@@ -74,8 +75,8 @@ async function generateCoverageSet(userId: string, publicationId: string, public
   const source = chunks.map(chunk => `[page ${chunk.page}]\n${chunk.text}`).join("\n\n"); const inputTokens = estimateTokens(source);
   if (inputTokens > MAX_INPUT_TOKENS_PER_RUN) throw new HttpsError("resource-exhausted", "This coverage set exceeds the input safety budget."); await reserveTokens(userId, inputTokens + MAX_OUTPUT_TOKENS_PER_RUN);
   const apiKey = googleGenAiKey.value(); if (!apiKey) throw new HttpsError("failed-precondition", "Google GenAI secret is not configured."); const ai = genkit({ plugins: [googleAI({ apiKey })] });
-  const result = await ai.generate({ model: googleAI.model(process.env.GEMINI_MODEL || "gemini-3.6-flash"), config: { maxOutputTokens: MAX_OUTPUT_TOKENS_PER_RUN, temperature: 0.2 }, prompt: `You generate source-grounded professional study questions. Use only the source passages below. Return JSON only: {"questions":[{"question":"...","answer":"...","explanation":"...","category":"other","page":123,"strictRecall":false}]}. Generate one concise recall question for each supplied page, cite its supplied page exactly, and do not invent facts.\n\n${source}` });
-  let generated: GeneratedQuestion[]; try { generated = JSON.parse(result.text || "{}").questions; } catch { throw new Error("Gemini returned invalid question JSON."); } if (!Array.isArray(generated) || !generated.length) throw new Error("Gemini returned no questions.");
+  const result = await ai.generate({ model: googleAI.model(process.env.GEMINI_MODEL || "gemini-3.6-flash"), config: { maxOutputTokens: MAX_OUTPUT_TOKENS_PER_RUN, temperature: 0.2 }, output: { schema: GeneratedQuestionSetSchema }, prompt: `You generate source-grounded professional study questions. Use only the source passages below. Generate one concise recall question for each supplied page, cite its supplied page exactly, and do not invent facts.\n\n${source}` });
+  const generated = result.output?.questions as GeneratedQuestion[] | undefined; if (!Array.isArray(generated) || !generated.length) throw new Error("Gemini returned no structured questions.");
   const validPages = new Set(chunks.map(chunk => chunk.page)); const batch = db.batch(); const accepted = generated.slice(0, chunks.length).filter(question => validPages.has(Number(question.page)));
   accepted.forEach(question => { const sourceChunk = chunks.find(chunk => chunk.page === Number(question.page)); batch.set(db.collection(`users/${userId}/questions`).doc(), { question: question.question, answer: question.answer, explanation: question.explanation, category: question.category || "other", page: Number(question.page), strictRecall: Boolean(question.strictRecall), publicationId, publicationTitle: publication.title, sourceChunkId: sourceChunk?.id ?? null, sourceExcerpt: sourceChunk?.text.slice(0, 700) ?? "", createdAt: FieldValue.serverTimestamp() }); });
   const nextPage = Math.max(...chunks.map(chunk => chunk.page)) + 1; batch.set(db.doc(`users/${userId}/publications/${publicationId}`), { status: "ready", generationCursorPage: nextPage, questionCount: FieldValue.increment(accepted.length), lastGeneratedAt: FieldValue.serverTimestamp() }, { merge: true }); await batch.commit(); return { generated: accepted.length, complete: false, nextPage };
