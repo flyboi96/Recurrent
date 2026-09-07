@@ -18,15 +18,17 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const CHUNK_CHARACTERS = 6_000;
 const COVERAGE_PAGES_PER_RUN = 6;
 const MAX_INPUT_TOKENS_PER_RUN = 12_000;
-const MAX_OUTPUT_TOKENS_PER_RUN = 1_800;
+const MAX_OUTPUT_TOKENS_PER_RUN = 3_000;
+const MAX_QUESTIONS_PER_PAGE = 3;
 // These are hard ceilings, sized to permit useful manual coverage work while
 // keeping a lost key or repeated clicks bounded.  Normal study uses saved
 // questions and makes no model request.
 const DAILY_LIMIT = 60_000;
 const MONTHLY_LIMIT = 600_000;
 const INGESTION_VERSION = 2;
+const COVERAGE_VERSION = 2;
 
-type StoredPublication = { title: string; storagePath: string; fileBytes: number; externalAiApproved?: boolean; sourceHash?: string; generationCursorPage?: number; ingestionVersion?: number };
+type StoredPublication = { title: string; storagePath: string; fileBytes: number; externalAiApproved?: boolean; sourceHash?: string; generationCursorPage?: number; ingestionVersion?: number; coverageVersion?: number };
 type SourceChunk = { id: string; page: number; chunkIndex: number; text: string };
 type GeneratedQuestion = { question: string; answer: string; explanation: string; category?: string; page?: number; strictRecall?: boolean };
 const GeneratedQuestionSetSchema = z.object({ questions: z.array(z.object({ question: z.string(), answer: z.string(), explanation: z.string(), category: z.string().optional(), page: z.number().int(), strictRecall: z.boolean().optional() })) });
@@ -74,6 +76,10 @@ async function writeChunks(userId: string, publicationId: string, pages: { page:
   return writes.length;
 }
 
+async function existingPublicationQuestions(userId: string, publicationId: string) {
+  return db.collection(`users/${userId}/questions`).where("publicationId", "==", publicationId).get();
+}
+
 async function indexPublication(userId: string, publicationId: string, publication: StoredPublication) {
   const [buffer] = await getStorage().bucket().file(publication.storagePath).download(); const sourceHash = createHash("sha256").update(buffer).digest("hex"); const pages = await extractPages(buffer); const chunkCount = await writeChunks(userId, publicationId, pages);
   await db.doc(`users/${userId}/publications/${publicationId}`).set({ sourceHash, pageCount: pages.length, chunkCount, ingestionVersion: INGESTION_VERSION, generationCursorPage: 1, indexedAt: FieldValue.serverTimestamp(), status: "indexed" }, { merge: true });
@@ -87,19 +93,22 @@ async function nextCoverageChunks(userId: string, publicationId: string, cursorP
 }
 
 async function generateCoverageSet(userId: string, publicationId: string, publication: StoredPublication) {
-  const chunks = await nextCoverageChunks(userId, publicationId, publication.generationCursorPage ?? 1);
+  // A new coverage version re-visits an existing manual without deleting the
+  // earlier questions. This lets us deepen an initial smoke-test pass safely.
+  const replaceExistingCoverage = publication.coverageVersion !== COVERAGE_VERSION; const cursorPage = replaceExistingCoverage ? 1 : publication.generationCursorPage ?? 1; const chunks = await nextCoverageChunks(userId, publicationId, cursorPage);
   if (!chunks.length) { await db.doc(`users/${userId}/publications/${publicationId}`).set({ status: "ready", coverageCompleteAt: FieldValue.serverTimestamp() }, { merge: true }); return { generated: 0, complete: true, nextPage: null }; }
   const source = chunks.map(chunk => `[page ${chunk.page}]\n${chunk.text}`).join("\n\n"); const inputTokens = estimateTokens(source);
   if (inputTokens > MAX_INPUT_TOKENS_PER_RUN) throw new HttpsError("resource-exhausted", "This coverage set exceeds the input safety budget."); await checkBudgetHeadroom(userId, inputTokens + MAX_OUTPUT_TOKENS_PER_RUN);
   const apiKey = googleGenAiKey.value(); if (!apiKey) throw new HttpsError("failed-precondition", "Google GenAI secret is not configured."); const ai = genkit({ plugins: [googleAI({ apiKey })] });
-  let result; try { result = await ai.generate({ model: googleAI.model(process.env.GEMINI_MODEL || "gemini-3.6-flash"), config: { maxOutputTokens: MAX_OUTPUT_TOKENS_PER_RUN, temperature: 0.1, thinkingConfig: { thinkingLevel: "MINIMAL" } }, output: { schema: GeneratedQuestionSetSchema }, prompt: `Generate exactly one short, source-grounded recall question for each supplied page. Return all fields for every question: question, answer, explanation, and exact page number. Keep every field concise. Use only the passages; do not invent facts.\n\n${source}` }); } catch (error) { logger.warn("Gemini returned an incomplete coverage set", { publicationId, message: error instanceof Error ? error.message.slice(0, 160) : "Unknown error" }); throw new HttpsError("unavailable", "Gemini returned an incomplete coverage set. Please retry."); }
-  const generated = result.output?.questions as GeneratedQuestion[] | undefined; if (!Array.isArray(generated) || !generated.length) throw new Error("Gemini returned no structured questions.");
+  let result; try { result = await ai.generate({ model: googleAI.model(process.env.GEMINI_MODEL || "gemini-3.6-flash"), config: { maxOutputTokens: MAX_OUTPUT_TOKENS_PER_RUN, temperature: 0.1, thinkingConfig: { thinkingLevel: "MINIMAL" } }, output: { schema: GeneratedQuestionSetSchema }, prompt: `Create only job-relevant, source-grounded professional study questions from the supplied passages. Test operational procedures, limitations, warnings, cautions, decision conditions, system behavior, emergency actions, and exact values where operationally relevant. Do NOT ask about the manual's title, version, revision history, volume, table of contents, page location, chapter layout, publication organization, or other document-navigation trivia. If a page contains only administrative or navigation material, return no question for that page. For operational material, return one to three DISTINCT questions. Return every field for every question: question, answer, explanation, and exact page number. Keep each field concise. Use only the passages; do not invent facts or duplicate a fact.\n\n${source}` }); } catch (error) { logger.warn("Gemini returned an incomplete coverage set", { publicationId, message: error instanceof Error ? error.message.slice(0, 160) : "Unknown error" }); throw new HttpsError("unavailable", "Gemini returned an incomplete coverage set. Please retry."); }
+  const generated = result.output?.questions as GeneratedQuestion[] | undefined; if (!Array.isArray(generated)) throw new Error("Gemini returned no structured questions.");
   // Prefer the provider's measured usage; retain a conservative local fallback
   // for providers that omit usage metadata.
   const actualInputTokens = Number(result.usage.inputTokens ?? inputTokens); const actualOutputTokens = Number(result.usage.outputTokens ?? estimateTokens(JSON.stringify(generated))); await recordSuccessfulUsage(userId, actualInputTokens, actualOutputTokens);
-  const validPages = new Set(chunks.map(chunk => chunk.page)); const batch = db.batch(); const accepted = generated.slice(0, chunks.length).filter(question => validPages.has(Number(question.page)));
+  const validPages = new Set(chunks.map(chunk => chunk.page)); const questionsPerPage = new Map<number, number>(); const questionFingerprints = new Set<string>(); const accepted = generated.filter(question => { const page = Number(question.page); const fingerprint = `${page}:${question.question.trim().toLowerCase()}`; const count = questionsPerPage.get(page) ?? 0; if (!validPages.has(page) || !question.question.trim() || !question.answer.trim() || !question.explanation.trim() || questionFingerprints.has(fingerprint) || count >= MAX_QUESTIONS_PER_PAGE) return false; questionsPerPage.set(page, count + 1); questionFingerprints.add(fingerprint); return true; }); const batch = db.batch();
+  const previousQuestions = replaceExistingCoverage ? await existingPublicationQuestions(userId, publicationId) : null; if (previousQuestions && previousQuestions.size + accepted.length > 400) throw new HttpsError("failed-precondition", "This publication needs a staged coverage upgrade."); previousQuestions?.docs.forEach(question => batch.delete(question.ref));
   accepted.forEach(question => { const sourceChunk = chunks.find(chunk => chunk.page === Number(question.page)); batch.set(db.collection(`users/${userId}/questions`).doc(), { question: question.question, answer: question.answer, explanation: question.explanation, category: question.category || "other", page: Number(question.page), strictRecall: Boolean(question.strictRecall), publicationId, publicationTitle: publication.title, sourceChunkId: sourceChunk?.id ?? null, sourceExcerpt: sourceChunk?.text.slice(0, 700) ?? "", createdAt: FieldValue.serverTimestamp() }); });
-  const nextPage = Math.max(...chunks.map(chunk => chunk.page)) + 1; batch.set(db.doc(`users/${userId}/publications/${publicationId}`), { status: "ready", generationCursorPage: nextPage, questionCount: FieldValue.increment(accepted.length), lastGeneratedAt: FieldValue.serverTimestamp() }, { merge: true }); await batch.commit(); return { generated: accepted.length, complete: false, nextPage };
+  const nextPage = Math.max(...chunks.map(chunk => chunk.page)) + 1; batch.set(db.doc(`users/${userId}/publications/${publicationId}`), { status: "ready", coverageVersion: COVERAGE_VERSION, generationCursorPage: nextPage, questionCount: replaceExistingCoverage ? accepted.length : FieldValue.increment(accepted.length), lastGeneratedAt: FieldValue.serverTimestamp() }, { merge: true }); await batch.commit(); return { generated: accepted.length, complete: false, nextPage };
 }
 
 /** Manual-only worker. App Check remains in observation mode until valid production metrics are confirmed. */
