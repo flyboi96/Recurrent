@@ -18,7 +18,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const CHUNK_CHARACTERS = 6_000;
 const COVERAGE_PAGES_PER_RUN = 6;
 const MAX_INPUT_TOKENS_PER_RUN = 12_000;
-const MAX_OUTPUT_TOKENS_PER_RUN = 1_200;
+const MAX_OUTPUT_TOKENS_PER_RUN = 1_800;
 // These are hard ceilings, sized to permit useful manual coverage work while
 // keeping a lost key or repeated clicks bounded.  Normal study uses saved
 // questions and makes no model request.
@@ -92,7 +92,7 @@ async function generateCoverageSet(userId: string, publicationId: string, public
   const source = chunks.map(chunk => `[page ${chunk.page}]\n${chunk.text}`).join("\n\n"); const inputTokens = estimateTokens(source);
   if (inputTokens > MAX_INPUT_TOKENS_PER_RUN) throw new HttpsError("resource-exhausted", "This coverage set exceeds the input safety budget."); await checkBudgetHeadroom(userId, inputTokens + MAX_OUTPUT_TOKENS_PER_RUN);
   const apiKey = googleGenAiKey.value(); if (!apiKey) throw new HttpsError("failed-precondition", "Google GenAI secret is not configured."); const ai = genkit({ plugins: [googleAI({ apiKey })] });
-  const result = await ai.generate({ model: googleAI.model(process.env.GEMINI_MODEL || "gemini-3.6-flash"), config: { maxOutputTokens: MAX_OUTPUT_TOKENS_PER_RUN, temperature: 0.2 }, output: { schema: GeneratedQuestionSetSchema }, prompt: `You generate source-grounded professional study questions. Use only the source passages below. Generate one concise recall question for each supplied page, cite its supplied page exactly, and do not invent facts.\n\n${source}` });
+  let result; try { result = await ai.generate({ model: googleAI.model(process.env.GEMINI_MODEL || "gemini-3.6-flash"), config: { maxOutputTokens: MAX_OUTPUT_TOKENS_PER_RUN, temperature: 0.1, thinkingConfig: { thinkingLevel: "MINIMAL" } }, output: { schema: GeneratedQuestionSetSchema }, prompt: `Generate exactly one short, source-grounded recall question for each supplied page. Return all fields for every question: question, answer, explanation, and exact page number. Keep every field concise. Use only the passages; do not invent facts.\n\n${source}` }); } catch (error) { logger.warn("Gemini returned an incomplete coverage set", { publicationId, message: error instanceof Error ? error.message.slice(0, 160) : "Unknown error" }); throw new HttpsError("unavailable", "Gemini returned an incomplete coverage set. Please retry."); }
   const generated = result.output?.questions as GeneratedQuestion[] | undefined; if (!Array.isArray(generated) || !generated.length) throw new Error("Gemini returned no structured questions.");
   // Prefer the provider's measured usage; retain a conservative local fallback
   // for providers that omit usage metadata.
