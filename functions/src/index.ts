@@ -20,11 +20,11 @@ const COVERAGE_PAGES_PER_RUN = 6;
 const MAX_INPUT_TOKENS_PER_RUN = 12_000;
 const MAX_OUTPUT_TOKENS_PER_RUN = 3_000;
 const MAX_QUESTIONS_PER_PAGE = 3;
-// These are hard ceilings, sized to permit useful manual coverage work while
-// keeping a lost key or repeated clicks bounded.  Normal study uses saved
-// questions and makes no model request.
-const DAILY_LIMIT = 100_000;
-const MONTHLY_LIMIT = 600_000;
+// A full 228-page handbook uses roughly 239k tokens. These hard ceilings allow
+// one deliberate retry after a full run while containing accidental repeat use.
+// Normal study uses saved questions and makes no model request.
+const DAILY_LIMIT = 600_000;
+const MONTHLY_LIMIT = 2_000_000;
 const INGESTION_VERSION = 2;
 const COVERAGE_VERSION = 2;
 const WHOLE_DOCUMENT_VERSION = 1;
