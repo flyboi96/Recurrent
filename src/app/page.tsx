@@ -14,7 +14,7 @@ import { APP_VERSION } from "@/config/release";
 type Tab = "Today" | "Study" | "Library" | "Progress" | "Settings";
 const nav: { label: Tab; icon: string }[] = [{ label: "Today", icon: "⌂" }, { label: "Study", icon: "◫" }, { label: "Library", icon: "▤" }, { label: "Progress", icon: "◔" }, { label: "Settings", icon: "⚙" }];
 
-function Source({ question }: { question: Question }) { const s = question.source; return <div className="source"><span>↗</span><div><b>{s.publicationTitle}</b><small>{s.section} · p. {s.page}</small></div><button className="source-link" onClick={() => alert(s.excerpt)}>View source</button></div>; }
+function Source({ question }: { question: Question }) { const s = question.source; return <div className="source"><span>✓</span><div><b>Model answer</b><small className="model-answer">{question.answer}</small><em>{s.publicationTitle} · p. {s.page}</em></div><button className="source-link" onClick={() => alert(s.excerpt)}>View source</button></div>; }
 
 function Today({ start }: { start: () => void }) { return <section className="hero clean-home"><p className="eyebrow">RECURRENT STUDY</p><h1>Stay sharp.</h1><p className="muted">A focused set of five questions from your active question banks.</p><div className="session-card"><div className="ring"><span>5</span><small>questions</small></div><div><p className="eyebrow">READY TO REVIEW</p><h2>Start a focused session</h2><p className="muted">Priority questions, presented in a fresh order.</p></div></div><button className="primary full" onClick={start}>Start session <span>→</span></button><p className="home-note">Manage documents in Library. Review or import questions in Question Banks.</p></section>; }
 
