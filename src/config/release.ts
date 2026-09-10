@@ -1,2 +1,2 @@
 /** Increment this user-visible release identifier whenever a build ships. */
-export const APP_VERSION = "0.6.1-alpha";
+export const APP_VERSION = "0.7.0-alpha";
