@@ -29,5 +29,11 @@ export function selectDailyQuestions(questions: Question[], states: Record<strin
       question.criticality * DEFAULT_WEIGHTS.critical + (question.isNew ? DEFAULT_WEIGHTS.fresh : DEFAULT_WEIGHTS.recent);
     return { question, score };
   });
-  return scored.sort((a, b) => b.score - a.score).slice(0, count).map(({ question }) => question);
+  const selected = scored.sort((a, b) => b.score - a.score).slice(0, count).map(({ question }) => question);
+  // Preserve priority while varying the order presented in every session.
+  for (let index = selected.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [selected[index], selected[swapIndex]] = [selected[swapIndex], selected[index]];
+  }
+  return selected;
 }
